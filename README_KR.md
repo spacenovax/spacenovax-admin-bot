@@ -20,6 +20,15 @@ Render 환경 변수에 `MINI_APP_URL`을 HTTPS 주소로 등록하면 `/start`�
 python bot.py
 ```
 
+## Render 배포 설정
+- 서비스 유형: Web Service
+- Python 버전: 3.12.11 (`.python-version`에 고정됨)
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `python bot.py`
+- Render가 제공하는 `PORT`와 `RENDER_EXTERNAL_URL`을 자동으로 사용합니다.
+- `WEBHOOK_URL`은 선택 사항입니다. 별도로 지정할 때는
+  `https://spacenovax-admin-bot.onrender.com`처럼 서비스의 공개 HTTPS 주소를 입력하세요.
+
 ## 환경 변수
 `.env.example`을 참고해 Render 환경 변수에 값을 등록하세요.
 실제 `.env` 파일이나 봇 토큰은 GitHub에 올리지 마세요.

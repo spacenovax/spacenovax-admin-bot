@@ -31,6 +31,9 @@ OFFICIAL_CHANNEL = os.getenv("OFFICIAL_CHANNEL", "@SpaceNovaX").strip()
 OFFICIAL_GROUP = os.getenv("OFFICIAL_GROUP", "@SpaceNovaXGlobal").strip()
 MINI_APP_URL = os.getenv("MINI_APP_URL", "").strip()
 MAX_WARNINGS = int(os.getenv("MAX_WARNINGS", "3"))
+PORT = int(os.getenv("PORT", "10000"))
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", RENDER_EXTERNAL_URL).strip().rstrip("/")
 
 ADMIN_IDS = {
     int(item.strip())
@@ -446,8 +449,18 @@ def main():
         app.add_handler(CommandHandler(cmd, func))
     app.add_handler(ChatMemberHandler(welcome, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_message))
-    print(f"{PROJECT_NAME} community bot is running...")
-    app.run_polling()
+    if WEBHOOK_URL:
+        print(f"{PROJECT_NAME} community bot is running in webhook mode on port {PORT}...")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path="telegram",
+            webhook_url=f"{WEBHOOK_URL}/telegram",
+            drop_pending_updates=False,
+        )
+    else:
+        print(f"{PROJECT_NAME} community bot is running in local polling mode...")
+        app.run_polling(drop_pending_updates=False)
 
 
 if __name__ == "__main__":
