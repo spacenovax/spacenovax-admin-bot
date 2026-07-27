@@ -1,51 +1,25 @@
-# SpaceNovaX Mining Points Bot
+# SpaceNovaX Telegram Community Bot
 
-## 포함 링크
-- YouTube: https://youtube.com/@spacenovaxteam?si=EYRw26QnrhXUkov8
-- X: https://x.com/spacenovaxteam
-- Telegram Group: https://t.me/spacesnovax
-- Telegram Channel: https://t.me/spacenovaxteam
-- Discord: https://discord.gg/rxVNWMC8e8
-- Website: http://www.spacenovax.com
+미션 기능을 포함하지 않는 커뮤니티 관리용 최종 버전입니다.
 
-## 기능
-- /mine : 24시간마다 100 SNP 적립
-- /mission : 미션 목록
-- /done youtube : 유튜브 구독 완료 기록
-- /done x : X 팔로우 완료 기록
-- /done telegram_group : 텔레그램 그룹 완료 기록
-- /done telegram_channel : 텔레그램 채널 완료 기록
-- /done discord : 디스코드 완료 기록
-- /done website : 웹사이트 방문 완료 기록
-- /points : 내 포인트 확인
-- /ref : 추천 링크
-- /rank : 랭킹
-- /wallet : Solana 지갑 등록
-- /export : 관리자 CSV 다운로드
+## 포함 기능
+- `/start`, `/rules`, `/about`, `/help`, `/stats`
+- 관리자 경고, 경고 취소, 차단, 차단 해제, 음소거, 메시지 고정
+- 스팸·피싱 링크 및 금칙어 자동 삭제
+- 경고 누적 및 자동 차단
+- 신규 사용자 환영 메시지
+- 공식 웹사이트·채널·그룹 버튼
+- 선택적 SpaceNovaX Mini App 실행 버튼
 
-## 설치
-```cmd
-python -m pip install -r requirements.txt
-```
+## Mini App 버튼
+Render 환경 변수에 `MINI_APP_URL`을 HTTPS 주소로 등록하면 `/start`에
+`🚀 Launch SpaceNovaX` 버튼이 표시됩니다.
 
-## 설정
-.env.example 파일 이름을 .env로 바꾼 뒤 아래 값을 수정하세요.
-
-```text
-BOT_TOKEN=BotFather 토큰
-ADMIN_IDS=내 텔레그램 숫자 ID
-```
-
-## 실행
-```cmd
+## Render 시작 명령
+```bash
 python bot.py
 ```
 
-성공 메시지:
-```text
-SpaceNovaX Mining Points Bot is running...
-```
-
-## 중요
-초기 버전은 사용자가 /done 명령으로 미션 완료를 직접 기록하는 방식입니다.
-최종 SPNX 전환 전에는 /export 파일을 기준으로 중복/부정 계정을 검토하는 것을 추천합니다.
+## 환경 변수
+`.env.example`을 참고해 Render 환경 변수에 값을 등록하세요.
+실제 `.env` 파일이나 봇 토큰은 GitHub에 올리지 마세요.
