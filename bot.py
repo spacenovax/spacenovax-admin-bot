@@ -1,6 +1,10 @@
 import os
 import re
+import hmac
+import hashlib
+import time
 import sqlite3
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -164,6 +168,15 @@ def upsert_user(user):
     conn.close()
 
 
+def stored_referral_code(user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT referred_by FROM users WHERE user_id=?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return str(row["referred_by"] or "").strip().upper() if row else ""
+
+
 def get_warning_count(chat_id, user_id):
     conn = db()
     row = conn.execute(
@@ -214,13 +227,36 @@ def language_keyboard():
     return InlineKeyboardMarkup(rows)
 
 
-def main_keyboard(lang="en"):
+def signed_referral_ticket(user_id, referral_code):
+    code = re.sub(r"[^A-Za-z0-9]", "", referral_code or "").upper()[:32]
+    if not code or not BOT_TOKEN:
+        return ""
+    issued_at = int(time.time())
+    payload = f"{code}.{user_id}.{issued_at}"
+    signature = hmac.new(BOT_TOKEN.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def mini_app_url(user_id=None, referral_code=""):
+    if not MINI_APP_URL:
+        return ""
+    ticket = signed_referral_ticket(user_id, referral_code) if user_id and referral_code else ""
+    if not ticket:
+        return MINI_APP_URL
+    parsed = urlsplit(MINI_APP_URL)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["rt"] = ticket
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def main_keyboard(lang="en", user_id=None, referral_code=""):
     t = I18N.get(lang, I18N["en"])
     keyboard = []
-    if MINI_APP_URL:
+    launch_url = mini_app_url(user_id, referral_code)
+    if launch_url:
         keyboard.append([
             InlineKeyboardButton(
-                t["app"], web_app=WebAppInfo(url=MINI_APP_URL)
+                t["app"], web_app=WebAppInfo(url=launch_url)
             )
         ])
     keyboard.extend([
@@ -263,9 +299,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if lang not in I18N: lang = "en"
         conn = db(); conn.execute("UPDATE users SET language=? WHERE user_id=?", (lang, query.from_user.id)); conn.commit(); conn.close()
         t = I18N[lang]
-        ref = context.user_data.pop("pending_ref", "")
+        ref = context.user_data.pop("pending_ref", "") or stored_referral_code(query.from_user.id)
         ref_line = ("\n\n" + t["ref"].format(code=ref)) if ref else ""
-        await query.edit_message_text(f"{t['welcome']}\n\n{t['pin']}{ref_line}\n\n{t['choose']}", reply_markup=main_keyboard(lang))
+        await query.edit_message_text(f"{t['welcome']}\n\n{t['pin']}{ref_line}\n\n{t['choose']}", reply_markup=main_keyboard(lang, query.from_user.id, ref))
         return
     if data.startswith("info:"):
         _, lang, topic = data.split(":", 2)
