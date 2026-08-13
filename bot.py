@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 from telegram import (
+    BotCommand,
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -19,11 +20,12 @@ from telegram.ext import (
     ChatMemberHandler,
     ContextTypes,
     filters,
+    CallbackQueryHandler,
 )
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN", "")).strip()
 PROJECT_NAME = os.getenv("PROJECT_NAME", "SpaceNovaX").strip()
 TOKEN_SYMBOL = os.getenv("TOKEN_SYMBOL", "SPNX").strip()
 OFFICIAL_WEBSITE = os.getenv("OFFICIAL_WEBSITE", "https://spacenovax.com").strip()
@@ -34,6 +36,30 @@ MAX_WARNINGS = int(os.getenv("MAX_WARNINGS", "3"))
 PORT = int(os.getenv("PORT", "10000"))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", RENDER_EXTERNAL_URL).strip().rstrip("/")
+
+LANGUAGES = {
+    "ko": ("🇰🇷 한국어", "한국어"), "en": ("🇺🇸 English", "English"),
+    "ja": ("🇯🇵 日本語", "日本語"), "zh": ("🇨🇳 中文", "中文"),
+    "vi": ("🇻🇳 Tiếng Việt", "Tiếng Việt"), "es": ("🇪🇸 Español", "Español"),
+    "pt": ("🇧🇷 Português", "Português"), "ru": ("🇷🇺 Русский", "Русский"),
+    "hi": ("🇮🇳 हिन्दी", "हिन्दी"), "tr": ("🇹🇷 Türkçe", "Türkçe"),
+    "id": ("🇮🇩 Indonesia", "Indonesia"), "ar": ("🇸🇦 العربية", "العربية"),
+}
+
+I18N = {
+ "ko": {"welcome":"🚀 SpaceNovaX 공식 봇에 오신 것을 환영합니다.","pin":"📌 이 대화를 텔레그램 상단에 고정해 주세요. 공지, 채굴 상태 및 중요 알림을 빠르게 확인할 수 있습니다.","ref":"🎖 추천 코드가 안전하게 연결되었습니다: {code}","choose":"아래에서 필요한 기능을 선택하세요.","app":"🚀 SpaceNovaX 앱 실행","channel":"📢 공식 채널","group":"💬 공식 그룹","site":"🌐 공식 웹사이트","mining":"⛏ 채굴 안내","mission":"🎯 미션 안내","referral":"👥 추천 안내","lang":"🌐 언어 변경"},
+ "en": {"welcome":"🚀 Welcome to the official SpaceNovaX bot.","pin":"📌 Please pin this chat to the top of Telegram for announcements, mining status and important alerts.","ref":"🎖 Referral code linked securely: {code}","choose":"Choose a service below.","app":"🚀 Launch SpaceNovaX","channel":"📢 Official Channel","group":"💬 Official Group","site":"🌐 Official Website","mining":"⛏ Mining Guide","mission":"🎯 Mission Guide","referral":"👥 Referral Guide","lang":"🌐 Change Language"},
+ "ja": {"welcome":"🚀 SpaceNovaX公式ボットへようこそ。","pin":"📌 お知らせと重要な通知のため、このチャットをTelegram上部に固定してください。","ref":"🎖 紹介コードを連携しました: {code}","choose":"機能を選択してください。","app":"🚀 アプリを起動","channel":"📢 公式チャンネル","group":"💬 公式グループ","site":"🌐 公式サイト","mining":"⛏ マイニング案内","mission":"🎯 ミッション案内","referral":"👥 紹介案内","lang":"🌐 言語変更"},
+ "zh": {"welcome":"🚀 欢迎使用SpaceNovaX官方机器人。","pin":"📌 请将此聊天置顶，以便接收公告、挖矿状态和重要提醒。","ref":"🎖 推荐码已安全绑定：{code}","choose":"请选择服务。","app":"🚀 启动SpaceNovaX","channel":"📢 官方频道","group":"💬 官方群组","site":"🌐 官方网站","mining":"⛏ 挖矿指南","mission":"🎯 任务指南","referral":"👥 推荐指南","lang":"🌐 更改语言"},
+ "vi": {"welcome":"🚀 Chào mừng đến bot SpaceNovaX chính thức.","pin":"📌 Hãy ghim cuộc trò chuyện này để nhận thông báo và trạng thái khai thác.","ref":"🎖 Đã liên kết mã giới thiệu: {code}","choose":"Chọn dịch vụ bên dưới.","app":"🚀 Mở SpaceNovaX","channel":"📢 Kênh chính thức","group":"💬 Nhóm chính thức","site":"🌐 Trang web","mining":"⛏ Hướng dẫn đào","mission":"🎯 Nhiệm vụ","referral":"👥 Giới thiệu","lang":"🌐 Đổi ngôn ngữ"},
+ "es": {"welcome":"🚀 Bienvenido al bot oficial de SpaceNovaX.","pin":"📌 Fija este chat para recibir anuncios y alertas importantes.","ref":"🎖 Código de referido vinculado: {code}","choose":"Elige un servicio.","app":"🚀 Abrir SpaceNovaX","channel":"📢 Canal oficial","group":"💬 Grupo oficial","site":"🌐 Sitio oficial","mining":"⛏ Guía de minería","mission":"🎯 Misiones","referral":"👥 Referidos","lang":"🌐 Cambiar idioma"},
+ "pt": {"welcome":"🚀 Bem-vindo ao bot oficial SpaceNovaX.","pin":"📌 Fixe esta conversa para receber anúncios e alertas.","ref":"🎖 Código de indicação vinculado: {code}","choose":"Escolha um serviço.","app":"🚀 Abrir SpaceNovaX","channel":"📢 Canal oficial","group":"💬 Grupo oficial","site":"🌐 Site oficial","mining":"⛏ Guia de mineração","mission":"🎯 Missões","referral":"👥 Indicações","lang":"🌐 Alterar idioma"},
+ "ru": {"welcome":"🚀 Добро пожаловать в официальный бот SpaceNovaX.","pin":"📌 Закрепите чат для уведомлений и статуса майнинга.","ref":"🎖 Реферальный код привязан: {code}","choose":"Выберите функцию.","app":"🚀 Открыть SpaceNovaX","channel":"📢 Официальный канал","group":"💬 Официальная группа","site":"🌐 Официальный сайт","mining":"⛏ Майнинг","mission":"🎯 Миссии","referral":"👥 Рефералы","lang":"🌐 Сменить язык"},
+ "hi": {"welcome":"🚀 आधिकारिक SpaceNovaX बॉट में आपका स्वागत है।","pin":"📌 घोषणाओं और अलर्ट के लिए इस चैट को पिन करें।","ref":"🎖 रेफरल कोड जुड़ गया: {code}","choose":"नीचे सेवा चुनें।","app":"🚀 SpaceNovaX खोलें","channel":"📢 आधिकारिक चैनल","group":"💬 आधिकारिक समूह","site":"🌐 वेबसाइट","mining":"⛏ माइनिंग गाइड","mission":"🎯 मिशन","referral":"👥 रेफरल","lang":"🌐 भाषा बदलें"},
+ "tr": {"welcome":"🚀 Resmi SpaceNovaX botuna hoş geldiniz.","pin":"📌 Duyuru ve uyarılar için bu sohbeti sabitleyin.","ref":"🎖 Referans kodu bağlandı: {code}","choose":"Bir hizmet seçin.","app":"🚀 SpaceNovaX'i Aç","channel":"📢 Resmi Kanal","group":"💬 Resmi Grup","site":"🌐 Resmi Site","mining":"⛏ Madencilik","mission":"🎯 Görevler","referral":"👥 Referans","lang":"🌐 Dil Değiştir"},
+ "id": {"welcome":"🚀 Selamat datang di bot resmi SpaceNovaX.","pin":"📌 Sematkan chat ini untuk pengumuman dan status mining.","ref":"🎖 Kode referral tertaut: {code}","choose":"Pilih layanan.","app":"🚀 Buka SpaceNovaX","channel":"📢 Kanal Resmi","group":"💬 Grup Resmi","site":"🌐 Situs Resmi","mining":"⛏ Panduan Mining","mission":"🎯 Misi","referral":"👥 Referral","lang":"🌐 Ganti Bahasa"},
+ "ar": {"welcome":"🚀 مرحبًا بك في بوت SpaceNovaX الرسمي.","pin":"📌 ثبّت هذه المحادثة لتلقي الإعلانات والتنبيهات.","ref":"🎖 تم ربط رمز الإحالة: {code}","choose":"اختر خدمة.","app":"🚀 فتح SpaceNovaX","channel":"📢 القناة الرسمية","group":"💬 المجموعة الرسمية","site":"🌐 الموقع الرسمي","mining":"⛏ دليل التعدين","mission":"🎯 المهام","referral":"👥 الإحالات","lang":"🌐 تغيير اللغة"},
+}
 
 ADMIN_IDS = {
     int(item.strip())
@@ -75,9 +101,17 @@ def db():
             user_id INTEGER PRIMARY KEY,
             username TEXT,
             first_name TEXT,
-            joined_at TEXT
+            joined_at TEXT,
+            language TEXT DEFAULT 'en',
+            referral_code TEXT,
+            referred_by TEXT
         )
     """)
+    for column, definition in (("language", "TEXT DEFAULT 'en'"), ("referral_code", "TEXT"), ("referred_by", "TEXT")):
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+        except sqlite3.OperationalError:
+            pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS warnings (
             chat_id INTEGER,
@@ -173,22 +207,28 @@ def log_action(chat_id, user_id, action, detail=""):
     conn.close()
 
 
-def main_keyboard():
+def language_keyboard():
+    rows, items = [], list(LANGUAGES.items())
+    for i in range(0, len(items), 2):
+        rows.append([InlineKeyboardButton(label, callback_data=f"lang:{code}") for code, (label, _) in items[i:i+2]])
+    return InlineKeyboardMarkup(rows)
+
+
+def main_keyboard(lang="en"):
+    t = I18N.get(lang, I18N["en"])
     keyboard = []
     if MINI_APP_URL:
         keyboard.append([
             InlineKeyboardButton(
-                "🚀 Launch SpaceNovaX", web_app=WebAppInfo(url=MINI_APP_URL)
+                t["app"], web_app=WebAppInfo(url=MINI_APP_URL)
             )
         ])
     keyboard.extend([
-        [InlineKeyboardButton("Official Website", url=OFFICIAL_WEBSITE)],
+        [InlineKeyboardButton(t["channel"], url=f"https://t.me/{OFFICIAL_CHANNEL.replace('@', '')}"), InlineKeyboardButton(t["group"], url=f"https://t.me/{OFFICIAL_GROUP.replace('@', '')}")],
+        [InlineKeyboardButton(t["site"], url=OFFICIAL_WEBSITE)],
         [InlineKeyboardButton(
-            "Official Channel", url=f"https://t.me/{OFFICIAL_CHANNEL.replace('@', '')}"
-        )],
-        [InlineKeyboardButton(
-            "Official Group", url=f"https://t.me/{OFFICIAL_GROUP.replace('@', '')}"
-        )],
+            t["mining"], callback_data=f"info:{lang}:mining"), InlineKeyboardButton(t["mission"], callback_data=f"info:{lang}:mission")],
+        [InlineKeyboardButton(t["referral"], callback_data=f"info:{lang}:referral"), InlineKeyboardButton(t["lang"], callback_data="choose_lang")],
     ])
     return InlineKeyboardMarkup(keyboard)
 
@@ -196,19 +236,45 @@ def main_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user)
-    mini_app_line = "🚀 Launch the SpaceNovaX Mini App with the button below.\n\n" if MINI_APP_URL else ""
+    ref_code = ""
+    if context.args:
+        candidate = re.sub(r"[^A-Za-z0-9_-]", "", context.args[0])[:64]
+        if candidate and candidate != str(user.id):
+            ref_code = candidate
+            conn = db()
+            conn.execute("UPDATE users SET referred_by=COALESCE(referred_by, ?) WHERE user_id=?", (candidate, user.id))
+            conn.commit(); conn.close()
     await update.effective_message.reply_text(
-        f"🚀 Welcome to {PROJECT_NAME}\n\n"
-        f"{mini_app_line}"
-        "This bot provides official project information and community moderation.\n\n"
-        "Commands:\n"
-        "/rules - Community rules\n"
-        "/about - About SpaceNovaX\n"
-        "/rules_kr - 한국어 커뮤니티 규칙\n"
-        "/about_kr - 한국어 프로젝트 소개\n"
-        "/help - Command list",
-        reply_markup=main_keyboard(),
+        "🌐 Select your language / 언어를 선택하세요",
+        reply_markup=language_keyboard(),
     )
+    context.user_data["pending_ref"] = ref_code
+
+
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    if data == "choose_lang":
+        await query.edit_message_text("🌐 Select your language / 언어를 선택하세요", reply_markup=language_keyboard())
+        return
+    if data.startswith("lang:"):
+        lang = data.split(":", 1)[1]
+        if lang not in I18N: lang = "en"
+        conn = db(); conn.execute("UPDATE users SET language=? WHERE user_id=?", (lang, query.from_user.id)); conn.commit(); conn.close()
+        t = I18N[lang]
+        ref = context.user_data.pop("pending_ref", "")
+        ref_line = ("\n\n" + t["ref"].format(code=ref)) if ref else ""
+        await query.edit_message_text(f"{t['welcome']}\n\n{t['pin']}{ref_line}\n\n{t['choose']}", reply_markup=main_keyboard(lang))
+        return
+    if data.startswith("info:"):
+        _, lang, topic = data.split(":", 2)
+        messages = {
+          "mining": {"ko":"⛏ 앱에서 매일 채굴 세션을 활성화하고 현재 시간당 채굴 속도를 확인하세요.","en":"⛏ Activate your daily mining session in the app and check your current hourly mining rate."},
+          "mission": {"ko":"🎯 앱의 공식 채널 5대 미션과 일일 게임 미션에서 진행 상태를 확인하세요.","en":"🎯 Check the five official-channel missions and daily game mission in the app."},
+          "referral": {"ko":"👥 앱에서 개인 초대 링크를 공유하세요. 동일 계정·자기 추천·중복 연결은 인정되지 않습니다.","en":"👥 Share your personal invitation link from the app. Self-referrals and duplicate links are not accepted."},
+        }
+        await query.message.reply_text(messages[topic].get(lang, messages[topic]["en"]))
 
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -438,7 +504,16 @@ def main():
         raise RuntimeError("BOT_TOKEN environment variable is missing.")
     if MINI_APP_URL and not MINI_APP_URL.startswith("https://"):
         raise RuntimeError("MINI_APP_URL must start with https://")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    async def configure_bot(application):
+        await application.bot.set_my_commands([
+            BotCommand("start", "Open SpaceNovaX / 언어 선택"),
+            BotCommand("about", "About SpaceNovaX"),
+            BotCommand("rules", "Community rules"),
+            BotCommand("stats", "Bot status"),
+            BotCommand("help", "Command list"),
+        ])
+
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(configure_bot).build()
     handlers = [
         ("start", start), ("rules", rules), ("rules_kr", rules_kr),
         ("about", about), ("about_kr", about_kr), ("help", help_cmd),
@@ -447,6 +522,7 @@ def main():
     ]
     for cmd, func in handlers:
         app.add_handler(CommandHandler(cmd, func))
+    app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(ChatMemberHandler(welcome, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_message))
     if WEBHOOK_URL:
