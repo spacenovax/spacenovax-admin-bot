@@ -10,6 +10,10 @@
 - 신규 사용자 환영 메시지
 - 그룹 입장 자동 인사 + 개인 봇 대화로 연결되는 12개국어 선택
 - Captain ID·채굴 앱·커뮤니티 사용 가이드 버튼
+- 입장 CAPTCHA 인증 후 채팅 권한 자동 부여
+- 도배 자동 음소거, 외부 링크·다국어 욕설·피싱 문구 차단
+- 사진·영상·파일 캡션 검사 및 `/report` 신고 기록
+- `DATABASE_URL` 사용 시 PostgreSQL 영구 저장 지원
 - 공식 웹사이트·채널·그룹 버튼
 - 선택적 SpaceNovaX Mini App 실행 버튼
 
@@ -42,6 +46,9 @@ BOT_USERNAME=SpaceNovaXAdminBot
 MINI_APP_URL=https://app.spacenovax.com
 COMMUNITY_GUIDE_URL=https://spacenovax.com/getting-started.html
 OFFICIAL_GROUP=@spacesnovax
+DATABASE_URL=postgresql://...  # 권장: Render PostgreSQL 또는 외부 PostgreSQL
+ADMIN_IDS=123456789            # 쉼표로 여러 관리자 ID 입력 가능
+JOIN_VERIFICATION_ENABLED=true
 ```
 
 ## 그룹 자동 환영 설정
@@ -56,3 +63,16 @@ OFFICIAL_GROUP=@spacesnovax
 채굴 앱 및 커뮤니티 가이드 버튼이 표시됩니다. Telegram 정책상 봇은 사용자가
 먼저 시작하지 않은 개인 대화에 직접 메시지를 보낼 수 없으므로, 이 방식이
 가장 안정적인 공식 입장 흐름입니다.
+
+## 자동 보안 기능
+
+- 새 입장자는 간단한 CAPTCHA를 통과한 뒤 채팅 권한을 받습니다.
+- 10초에 6개를 초과하는 메시지는 기본 10분 자동 음소거됩니다.
+- 공식 SpaceNovaX 링크는 허용하고, 그 외 링크·피싱 문구·기본 다국어 욕설은
+  자동 삭제 및 경고 처리합니다. 추가 금칙어는 `EXTRA_BANNED_WORDS`에 쉼표로 입력합니다.
+- 사진·영상·문서의 캡션도 같은 필터를 통과합니다.
+- `/report`를 의심 메시지에 답글로 사용하면 관리자에게 알리고 영구 DB에 기록합니다.
+
+`DATABASE_URL`을 설정하면 언어, 경고, 신고 및 인증 기록을 PostgreSQL에 저장합니다.
+값이 없을 때는 기존 SQLite 임시 저장 방식으로 동작하므로, 운영 환경에서는
+PostgreSQL 설정을 권장합니다.
