@@ -351,7 +351,15 @@ def has_unapproved_link(text):
     for match in LINK_RE.findall(text or ""):
         url = match.lower().rstrip(".,!?:;)")
         normalized = url if url.startswith("http") else f"https://{url}"
-        if not any(normalized.startswith(prefix) for prefix in ALLOWED_LINK_PREFIXES):
+        # Accept only the official destination itself, a path below it, or a query.
+        # This avoids look-alike domains such as spacenovax.com.evil.example.
+        is_official = any(
+            normalized == prefix
+            or normalized.startswith(prefix + "/")
+            or normalized.startswith(prefix + "?")
+            for prefix in ALLOWED_LINK_PREFIXES
+        )
+        if not is_official:
             return True
     return False
 
