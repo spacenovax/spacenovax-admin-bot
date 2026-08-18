@@ -4,6 +4,8 @@ import hmac
 import hashlib
 import time
 import sqlite3
+import secrets
+from collections import defaultdict, deque
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -41,6 +43,13 @@ COMMUNITY_GUIDE_URL = os.getenv(
     "COMMUNITY_GUIDE_URL", f"{OFFICIAL_WEBSITE.rstrip('/')}/getting-started.html"
 ).strip()
 MAX_WARNINGS = int(os.getenv("MAX_WARNINGS", "3"))
+WARNING_EXPIRY_DAYS = int(os.getenv("WARNING_EXPIRY_DAYS", "30"))
+MESSAGE_WINDOW_SECONDS = int(os.getenv("MESSAGE_WINDOW_SECONDS", "10"))
+MAX_MESSAGES_PER_WINDOW = int(os.getenv("MAX_MESSAGES_PER_WINDOW", "6"))
+AUTO_MUTE_SECONDS = int(os.getenv("AUTO_MUTE_SECONDS", "600"))
+JOIN_VERIFICATION_ENABLED = os.getenv("JOIN_VERIFICATION_ENABLED", "true").lower() == "true"
+VERIFICATION_TTL_MINUTES = int(os.getenv("VERIFICATION_TTL_MINUTES", "30"))
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 PORT = int(os.getenv("PORT", "10000"))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", RENDER_EXTERNAL_URL).strip().rstrip("/")
@@ -76,15 +85,34 @@ ADMIN_IDS = {
 }
 
 DB_PATH = Path(os.getenv("DB_PATH", "spacenovax_bot.db"))
-LINK_RE = re.compile(
-    r"(https?://|www\.|t\.me/|telegram\.me/|bit\.ly|tinyurl|discord\.gg)", re.I
-)
+LINK_RE = re.compile(r"(?:https?://|www\.|t\.me/|telegram\.me/|bit\.ly/|tinyurl\.com/|discord\.gg/)[^\s<>()]+", re.I)
 
 BANNED_WORDS = [
     "send private key", "seed phrase", "free usdt", "double your money",
     "admin dm", "support dm", "private key", "guaranteed profit",
     "개인키", "시드구문", "무료 usdt", "관리자 dm", "고수익 보장", "원금 보장",
 ]
+EXTRA_BANNED_WORDS = [
+    word.strip().lower() for word in os.getenv("EXTRA_BANNED_WORDS", "").split(",") if word.strip()
+]
+PROFANITY_WORDS = [
+    # A conservative multi-language baseline. Administrators can extend this
+    # through EXTRA_BANNED_WORDS without publishing moderation terms in code.
+    "fuck", "shit", "bitch", "asshole", "motherfucker", "개새끼", "씨발", "병신", "좆",
+    "くそ", "死ね", "混蛋", "傻逼", "puta", "mierda", "пизда", "сука", "orospu", "siktir",
+]
+ALLOWED_LINK_PREFIXES = [
+    item.strip().lower().rstrip("/")
+    for item in os.getenv("ALLOWED_LINK_PREFIXES", "").split(",") if item.strip()
+] or [
+    OFFICIAL_WEBSITE.lower().rstrip("/"),
+    "https://app.spacenovax.com",
+    f"https://t.me/{BOT_USERNAME.lower()}",
+    f"https://t.me/{OFFICIAL_CHANNEL.replace('@', '').lower()}",
+    f"https://t.me/{OFFICIAL_GROUP.replace('@', '').lower()}",
+    "https://discord.gg/u37axpnfwc",
+]
+MESSAGE_TIMESTAMPS = defaultdict(deque)
 
 PROJECT_KEYWORDS = {
     "website": f"🌐 Official Website: {OFFICIAL_WEBSITE}",
@@ -125,12 +153,41 @@ GROUP_WELCOME = {
 }
 
 
+class Database:
+    """Small SQLite/PostgreSQL compatibility layer for the existing bot SQL."""
+
+    def __init__(self):
+        self.is_postgres = bool(DATABASE_URL)
+        if self.is_postgres:
+            try:
+                import psycopg
+                from psycopg.rows import dict_row
+            except ImportError as exc:
+                raise RuntimeError("DATABASE_URL requires psycopg. Install requirements.txt first.") from exc
+            self.conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        else:
+            self.conn = sqlite3.connect(DB_PATH)
+            self.conn.row_factory = sqlite3.Row
+
+    def execute(self, query, params=()):
+        if self.is_postgres:
+            query = query.replace("?", "%s")
+        return self.conn.execute(query, params)
+
+    def commit(self):
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+
 def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("""
+    conn = Database()
+    user_id_type = "BIGINT" if conn.is_postgres else "INTEGER"
+    log_id = "BIGSERIAL PRIMARY KEY" if conn.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(f"""
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
+            user_id {user_id_type} PRIMARY KEY,
             username TEXT,
             first_name TEXT,
             joined_at TEXT,
@@ -139,15 +196,19 @@ def db():
             referred_by TEXT
         )
     """)
-    for column, definition in (("language", "TEXT DEFAULT 'en'"), ("referral_code", "TEXT"), ("referred_by", "TEXT")):
-        try:
-            conn.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
-        except sqlite3.OperationalError:
-            pass
+    if conn.is_postgres:
+        for column, definition in (("language", "TEXT DEFAULT 'en'"), ("referral_code", "TEXT"), ("referred_by", "TEXT")):
+            conn.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {definition}")
+    else:
+        for column, definition in (("language", "TEXT DEFAULT 'en'"), ("referral_code", "TEXT"), ("referred_by", "TEXT")):
+            try:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS warnings (
-            chat_id INTEGER,
-            user_id INTEGER,
+            chat_id BIGINT,
+            user_id BIGINT,
             count INTEGER DEFAULT 0,
             updated_at TEXT,
             PRIMARY KEY(chat_id, user_id)
@@ -155,14 +216,36 @@ def db():
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            user_id INTEGER,
+            id %s,
+            chat_id BIGINT,
+            user_id BIGINT,
             action TEXT,
             detail TEXT,
             created_at TEXT
         )
+    """ % log_id)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pending_verifications (
+            token TEXT PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            id %s,
+            chat_id BIGINT NOT NULL,
+            reporter_id BIGINT NOT NULL,
+            target_user_id BIGINT,
+            message_id BIGINT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        )
+    """ % log_id)
     conn.commit()
     return conn
 
@@ -205,13 +288,103 @@ def stored_referral_code(user_id):
     return str(row["referred_by"] or "").strip().upper() if row else ""
 
 
+def stored_language(user_id):
+    conn = db()
+    row = conn.execute("SELECT language FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return row["language"] if row and row["language"] in LANGUAGES else "en"
+
+
+def is_expired(iso_timestamp):
+    try:
+        return datetime.fromisoformat(iso_timestamp) <= datetime.now(timezone.utc)
+    except (TypeError, ValueError):
+        return True
+
+
+def create_verification(chat_id, user_id):
+    token = secrets.token_urlsafe(16)
+    left = secrets.randbelow(8) + 1
+    right = secrets.randbelow(8) + 1
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=VERIFICATION_TTL_MINUTES)).isoformat()
+    conn = db()
+    conn.execute("DELETE FROM pending_verifications WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    conn.execute(
+        "INSERT INTO pending_verifications(token, chat_id, user_id, question, answer, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (token, chat_id, user_id, f"{left} + {right} = ?", str(left + right), expires_at, now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    return token, left, right
+
+
+def get_verification(token, user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT token, chat_id, user_id, question, answer, expires_at FROM pending_verifications WHERE token=? AND user_id=?",
+        (token, user_id),
+    ).fetchone()
+    conn.close()
+    if not row or is_expired(row["expires_at"]):
+        return None
+    return row
+
+
+def consume_verification(token):
+    conn = db()
+    conn.execute("DELETE FROM pending_verifications WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
+
+
+def captcha_keyboard(token, correct):
+    choices = [correct, correct + 1, max(0, correct - 1)]
+    # Shuffle without a predictable correct position while keeping callback
+    # data server-verified against the one-time token.
+    secrets.SystemRandom().shuffle(choices)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(str(choice), callback_data=f"captcha:{token}:{choice}") for choice in choices],
+    ])
+
+
+def has_unapproved_link(text):
+    for match in LINK_RE.findall(text or ""):
+        url = match.lower().rstrip(".,!?:;)")
+        normalized = url if url.startswith("http") else f"https://{url}"
+        if not any(normalized.startswith(prefix) for prefix in ALLOWED_LINK_PREFIXES):
+            return True
+    return False
+
+
+def exceeds_message_rate(chat_id, user_id):
+    key = (chat_id, user_id)
+    now = time.monotonic()
+    timestamps = MESSAGE_TIMESTAMPS[key]
+    while timestamps and now - timestamps[0] > MESSAGE_WINDOW_SECONDS:
+        timestamps.popleft()
+    timestamps.append(now)
+    return len(timestamps) > MAX_MESSAGES_PER_WINDOW
+
+
 def get_warning_count(chat_id, user_id):
     conn = db()
     row = conn.execute(
         "SELECT count FROM warnings WHERE chat_id=? AND user_id=?", (chat_id, user_id)
     ).fetchone()
+    if not row:
+        conn.close()
+        return 0
+    try:
+        stale = datetime.fromisoformat(row["updated_at"]) < datetime.now(timezone.utc) - timedelta(days=WARNING_EXPIRY_DAYS)
+    except (TypeError, ValueError):
+        stale = True
+    if stale:
+        conn.execute("DELETE FROM warnings WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        conn.commit()
+        conn.close()
+        return 0
     conn.close()
-    return int(row["count"]) if row else 0
+    return int(row["count"])
 
 
 def set_warning(chat_id, user_id, count):
@@ -259,8 +432,10 @@ def private_bot_link(start_parameter="community"):
     return f"https://t.me/{BOT_USERNAME}?start={start_parameter}"
 
 
-def group_welcome_keyboard():
-    keyboard = [[InlineKeyboardButton("🌐 Choose Language / 언어 선택", url=private_bot_link())]]
+def group_welcome_keyboard(verification_token=""):
+    start_parameter = f"verify_{verification_token}" if verification_token else "community"
+    label = "🛡 Verify & Choose Language" if verification_token else "🌐 Choose Language / 언어 선택"
+    keyboard = [[InlineKeyboardButton(label, url=private_bot_link(start_parameter))]]
     if MINI_APP_URL:
         keyboard.append([InlineKeyboardButton("🚀 Open Mining App", url=MINI_APP_URL)])
     keyboard.append([InlineKeyboardButton("🧭 Community App Guide", url=COMMUNITY_GUIDE_URL)])
@@ -313,9 +488,24 @@ def main_keyboard(lang="en", user_id=None, referral_code=""):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user)
+    start_arg = context.args[0] if context.args else ""
+    if start_arg.startswith("verify_"):
+        token = start_arg.split("verify_", 1)[1]
+        verification = get_verification(token, user.id)
+        if not verification:
+            await update.effective_message.reply_text(
+                "⏳ This verification link has expired. Please return to the group and use the latest verification button."
+            )
+            return
+        answer = int(verification["answer"])
+        await update.effective_message.reply_text(
+            f"🛡 Security check\n\n{verification['question']}",
+            reply_markup=captcha_keyboard(token, answer),
+        )
+        return
     ref_code = ""
-    if context.args:
-        candidate = re.sub(r"[^A-Za-z0-9_-]", "", context.args[0])[:64]
+    if start_arg and start_arg != "community":
+        candidate = re.sub(r"[^A-Za-z0-9_-]", "", start_arg)[:64]
         if candidate and candidate != str(user.id):
             ref_code = candidate
             conn = db()
@@ -332,6 +522,29 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data or ""
+    if data.startswith("captcha:"):
+        _, token, submitted = data.split(":", 2)
+        verification = get_verification(token, query.from_user.id)
+        if not verification:
+            await query.edit_message_text("⏳ Verification expired. Return to the group and use the newest button.")
+            return
+        if not hmac.compare_digest(str(submitted), str(verification["answer"])):
+            await query.answer("Incorrect answer. Try again.", show_alert=True)
+            return
+        try:
+            chat = await context.bot.get_chat(verification["chat_id"])
+            permissions = chat.permissions or ChatPermissions(can_send_messages=True)
+            await context.bot.restrict_chat_member(verification["chat_id"], query.from_user.id, permissions=permissions)
+        except Exception:
+            # The group flow still works if the administrator has not yet
+            # granted Restrict Members permission to the bot.
+            pass
+        consume_verification(token)
+        await query.edit_message_text(
+            "✅ Verification complete. Select your language / 언어를 선택하세요",
+            reply_markup=language_keyboard(),
+        )
+        return
     if data == "choose_lang":
         await query.edit_message_text("🌐 Select your language / 언어를 선택하세요", reply_markup=language_keyboard())
         return
@@ -415,6 +628,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/rules_kr - Korean rules\n"
         "/about_kr - Korean introduction\n"
         "/stats - Bot status\n\n"
+        "/report - Reply to a suspicious message\n\n"
         "Admin only:\n"
         "/warn - Warn replied user\n"
         "/unwarn - Remove warning\n"
@@ -524,8 +738,41 @@ async def pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("📌 Message pinned.")
 
 
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        await msg.reply_text("Reply to the suspicious message with /report.")
+        return
+    target = msg.reply_to_message.from_user
+    detail = " ".join(context.args).strip()[:500]
+    conn = db()
+    conn.execute(
+        "INSERT INTO reports(chat_id, reporter_id, target_user_id, message_id, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (msg.chat_id, msg.from_user.id, target.id, msg.reply_to_message.message_id, detail, now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    await msg.reply_text("✅ Report received. The moderation team has been notified.")
+    notice = (
+        f"🚨 {PROJECT_NAME} report\n"
+        f"Chat: {msg.chat_id}\nReporter: {msg.from_user.id}\n"
+        f"Target: {target.id} (@{target.username or 'no_username'})\n"
+        f"Message: {msg.reply_to_message.message_id}\n"
+        f"Detail: {detail or 'No additional detail'}"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin_id, notice)
+        except Exception:
+            # Telegram cannot message an administrator who has not started the
+            # bot; the report remains in the persistent reports table.
+            pass
+
+
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.chat_member:
+        return
+    if update.effective_chat.type not in ("group", "supergroup"):
         return
     old = update.chat_member.old_chat_member.status
     new = update.chat_member.new_chat_member.status
@@ -541,20 +788,35 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if row and row["language"] in LANGUAGES:
             lang = row["language"]
         template = GROUP_WELCOME.get(lang, GROUP_WELCOME["en"])
+        verification_token = ""
+        if JOIN_VERIFICATION_ENABLED:
+            try:
+                verification_token, _, _ = create_verification(update.effective_chat.id, user.id)
+                await context.bot.restrict_chat_member(
+                    update.effective_chat.id,
+                    user.id,
+                    permissions=ChatPermissions(can_send_messages=False),
+                )
+            except Exception:
+                # Do not block a newcomer when the bot lacks the Telegram
+                # administrator permission required to restrict members.
+                verification_token = ""
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=template.format(name=user.first_name),
-            reply_markup=group_welcome_keyboard(),
+            reply_markup=group_welcome_keyboard(verification_token),
         )
 
 
 async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not msg.text:
+    if not msg:
         return
     user = msg.from_user
+    if not user or user.is_bot:
+        return
     chat_id = msg.chat_id
-    text = msg.text.lower()
+    text = (msg.text or msg.caption or "").lower()
     upsert_user(user)
     if is_admin(user.id):
         return
@@ -562,8 +824,21 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if key in text:
             await msg.reply_text(response)
             return
-    has_link = bool(LINK_RE.search(text))
-    has_bad_word = any(word.lower() in text for word in BANNED_WORDS)
+    if exceeds_message_rate(chat_id, user.id):
+        until = datetime.now(timezone.utc) + timedelta(seconds=AUTO_MUTE_SECONDS)
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id, user.id, permissions=ChatPermissions(can_send_messages=False), until_date=until,
+            )
+        except Exception:
+            pass
+        log_action(chat_id, user.id, "flood_mute", f"seconds={AUTO_MUTE_SECONDS}")
+        await context.bot.send_message(
+            chat_id, f"🔇 {user.first_name} was muted for {AUTO_MUTE_SECONDS // 60} minutes for message flooding.",
+        )
+        return
+    has_link = has_unapproved_link(text)
+    has_bad_word = any(word.lower() in text for word in [*BANNED_WORDS, *EXTRA_BANNED_WORDS, *PROFANITY_WORDS])
     compact = text.replace(" ", "")
     repeated = len(text) > 20 and compact and len(set(compact)) <= 4
     if has_link or has_bad_word or repeated:
@@ -572,7 +847,8 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         count = add_warning(chat_id, user.id)
-        log_action(chat_id, user.id, "auto_warn", f"count={count}")
+        reason = "link" if has_link else "language" if has_bad_word else "repeated_text"
+        log_action(chat_id, user.id, "auto_warn", f"reason={reason};count={count}")
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"⚠️ {user.first_name}, unsafe or spam message removed. Warning: {count}/{MAX_WARNINGS}",
@@ -597,6 +873,7 @@ def main():
             BotCommand("rules", "Community rules"),
             BotCommand("stats", "Bot status"),
             BotCommand("help", "Command list"),
+            BotCommand("report", "Report a replied message"),
         ])
 
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(configure_bot).build()
@@ -604,13 +881,13 @@ def main():
         ("start", start), ("rules", rules), ("rules_kr", rules_kr),
         ("about", about), ("about_kr", about_kr), ("help", help_cmd),
         ("stats", stats), ("warn", warn), ("unwarn", unwarn),
-        ("ban", ban), ("unban", unban), ("mute", mute), ("pin", pin),
+        ("ban", ban), ("unban", unban), ("mute", mute), ("pin", pin), ("report", report),
     ]
     for cmd, func in handlers:
         app.add_handler(CommandHandler(cmd, func))
     app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(ChatMemberHandler(welcome, ChatMemberHandler.CHAT_MEMBER))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_message))
+    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, moderate_message))
     if WEBHOOK_URL:
         print(f"{PROJECT_NAME} community bot is running in webhook mode on port {PORT}...")
         app.run_webhook(
