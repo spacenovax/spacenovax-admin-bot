@@ -35,7 +35,11 @@ TOKEN_SYMBOL = os.getenv("TOKEN_SYMBOL", "SPNX").strip()
 OFFICIAL_WEBSITE = os.getenv("OFFICIAL_WEBSITE", "https://spacenovax.com").strip()
 OFFICIAL_CHANNEL = os.getenv("OFFICIAL_CHANNEL", "@spacenovaxteam").strip()
 OFFICIAL_GROUP = os.getenv("OFFICIAL_GROUP", "@spacesnovax").strip()
-MINI_APP_URL = os.getenv("MINI_APP_URL", "").strip()
+MINI_APP_URL = os.getenv("MINI_APP_URL", "https://app.spacenovax.com").strip()
+BOT_USERNAME = os.getenv("BOT_USERNAME", "SpaceNovaXAdminBot").strip().lstrip("@")
+COMMUNITY_GUIDE_URL = os.getenv(
+    "COMMUNITY_GUIDE_URL", f"{OFFICIAL_WEBSITE.rstrip('/')}/getting-started.html"
+).strip()
 MAX_WARNINGS = int(os.getenv("MAX_WARNINGS", "3"))
 PORT = int(os.getenv("PORT", "10000"))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
@@ -94,6 +98,30 @@ PROJECT_KEYWORDS = {
     "채널": f"📢 공식 채널: {OFFICIAL_CHANNEL}",
     "그룹": f"💬 공식 그룹: {OFFICIAL_GROUP}",
     "심볼": f"🪙 토큰 심볼: {TOKEN_SYMBOL}",
+}
+
+# This guidance is intentionally delivered in a private bot chat. Telegram
+# bots cannot proactively DM a member who has never started the bot, and a
+# language callback in a group would edit one shared message for everyone.
+# The group welcome therefore opens this per-user flow through a deep link.
+ONBOARDING = {
+    "ko": "🪪 채굴, 미션 및 월드 채팅을 이용하려면 Captain ID가 필요합니다. 아래에서 SpaceNovaX Mini App을 열고 Captain ID를 연결해 주세요.",
+    "en": "🪪 Captain ID is required for mining, missions and World Chat. Open the SpaceNovaX Mini App below and connect your Captain ID.",
+    "ja": "🪪 マイニング、ミッション、ワールドチャットにはCaptain IDが必要です。下のSpaceNovaX Mini Appを開いてCaptain IDを連携してください。",
+    "zh": "🪪 挖矿、任务和世界聊天需要 Captain ID。请打开下方 SpaceNovaX Mini App 并连接您的 Captain ID。",
+    "vi": "🪪 Captain ID là bắt buộc để dùng mining, nhiệm vụ và World Chat. Hãy mở Mini App SpaceNovaX bên dưới và kết nối Captain ID.",
+    "es": "🪪 Captain ID es necesario para minería, misiones y World Chat. Abre la Mini App de SpaceNovaX y conecta tu Captain ID.",
+    "pt": "🪪 O Captain ID é necessário para mineração, missões e World Chat. Abra a Mini App da SpaceNovaX e conecte seu Captain ID.",
+    "ru": "🪪 Captain ID требуется для майнинга, миссий и World Chat. Откройте Mini App SpaceNovaX и подключите Captain ID.",
+    "hi": "🪪 माइनिंग, मिशन और वर्ल्ड चैट के लिए Captain ID आवश्यक है। नीचे SpaceNovaX Mini App खोलें और अपना Captain ID कनेक्ट करें।",
+    "tr": "🪪 Madencilik, görevler ve World Chat için Captain ID gereklidir. Aşağıdaki SpaceNovaX Mini App'i açın ve Captain ID'nizi bağlayın.",
+    "id": "🪪 Captain ID diperlukan untuk mining, misi, dan World Chat. Buka Mini App SpaceNovaX di bawah lalu hubungkan Captain ID Anda.",
+    "ar": "🪪 يلزم Captain ID للتعدين والمهام وWorld Chat. افتح تطبيق SpaceNovaX Mini App أدناه واربط Captain ID الخاص بك.",
+}
+
+GROUP_WELCOME = {
+    "ko": "🚀 {name}님, SpaceNovaX 월드 커뮤니티에 오신 것을 환영합니다!\n\n채굴·미션·월드 채팅을 시작하려면 아래 버튼으로 봇을 열고 언어를 선택한 뒤 Captain ID를 연결해 주세요.",
+    "en": "🚀 Welcome to the SpaceNovaX World Community, {name}!\n\nTo start mining, missions and World Chat, open the bot below, choose your language and connect your Captain ID.",
 }
 
 
@@ -227,6 +255,18 @@ def language_keyboard():
     return InlineKeyboardMarkup(rows)
 
 
+def private_bot_link(start_parameter="community"):
+    return f"https://t.me/{BOT_USERNAME}?start={start_parameter}"
+
+
+def group_welcome_keyboard():
+    keyboard = [[InlineKeyboardButton("🌐 Choose Language / 언어 선택", url=private_bot_link())]]
+    if MINI_APP_URL:
+        keyboard.append([InlineKeyboardButton("🚀 Open Mining App", url=MINI_APP_URL)])
+    keyboard.append([InlineKeyboardButton("🧭 Community App Guide", url=COMMUNITY_GUIDE_URL)])
+    return InlineKeyboardMarkup(keyboard)
+
+
 def signed_referral_ticket(user_id, referral_code):
     code = re.sub(r"[^A-Za-z0-9]", "", referral_code or "").upper()[:32]
     if not code or not BOT_TOKEN:
@@ -262,6 +302,7 @@ def main_keyboard(lang="en", user_id=None, referral_code=""):
     keyboard.extend([
         [InlineKeyboardButton(t["channel"], url=f"https://t.me/{OFFICIAL_CHANNEL.replace('@', '')}"), InlineKeyboardButton(t["group"], url=f"https://t.me/{OFFICIAL_GROUP.replace('@', '')}")],
         [InlineKeyboardButton(t["site"], url=OFFICIAL_WEBSITE)],
+        [InlineKeyboardButton("🧭 Community App Guide", url=COMMUNITY_GUIDE_URL)],
         [InlineKeyboardButton(
             t["mining"], callback_data=f"info:{lang}:mining"), InlineKeyboardButton(t["mission"], callback_data=f"info:{lang}:mission")],
         [InlineKeyboardButton(t["referral"], callback_data=f"info:{lang}:referral"), InlineKeyboardButton(t["lang"], callback_data="choose_lang")],
@@ -301,7 +342,11 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t = I18N[lang]
         ref = context.user_data.pop("pending_ref", "") or stored_referral_code(query.from_user.id)
         ref_line = ("\n\n" + t["ref"].format(code=ref)) if ref else ""
-        await query.edit_message_text(f"{t['welcome']}\n\n{t['pin']}{ref_line}\n\n{t['choose']}", reply_markup=main_keyboard(lang, query.from_user.id, ref))
+        onboarding = ONBOARDING.get(lang, ONBOARDING["en"])
+        await query.edit_message_text(
+            f"{t['welcome']}\n\n{onboarding}{ref_line}\n\n{t['choose']}",
+            reply_markup=main_keyboard(lang, query.from_user.id, ref),
+        )
         return
     if data.startswith("info:"):
         _, lang, topic = data.split(":", 2)
@@ -487,14 +532,19 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.chat_member.new_chat_member.user
     if old in ("left", "kicked") and new in ("member", "restricted"):
         upsert_user(user)
+        # Keep the group message brief; the private deep link opens a
+        # user-specific 12-language screen without changing the group card.
+        lang = "en"
+        conn = db()
+        row = conn.execute("SELECT language FROM users WHERE user_id=?", (user.id,)).fetchone()
+        conn.close()
+        if row and row["language"] in LANGUAGES:
+            lang = row["language"]
+        template = GROUP_WELCOME.get(lang, GROUP_WELCOME["en"])
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=(
-                f"🚀 Welcome {user.first_name} to {PROJECT_NAME}!\n\n"
-                "Please read /rules before chatting.\n"
-                "한국어 규칙: /rules_kr\n\n"
-                f"Website: {OFFICIAL_WEBSITE}"
-            ),
+            text=template.format(name=user.first_name),
+            reply_markup=group_welcome_keyboard(),
         )
 
 
@@ -569,10 +619,11 @@ def main():
             url_path="telegram",
             webhook_url=f"{WEBHOOK_URL}/telegram",
             drop_pending_updates=False,
+            allowed_updates=Update.ALL_TYPES,
         )
     else:
         print(f"{PROJECT_NAME} community bot is running in local polling mode...")
-        app.run_polling(drop_pending_updates=False)
+        app.run_polling(drop_pending_updates=False, allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
