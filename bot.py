@@ -5,6 +5,9 @@ import hashlib
 import time
 import sqlite3
 import secrets
+import json
+import asyncio
+from urllib import request
 from collections import defaultdict, deque
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pathlib import Path
@@ -53,6 +56,13 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 PORT = int(os.getenv("PORT", "10000"))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", RENDER_EXTERNAL_URL).strip().rstrip("/")
+
+# Guest NOVA is optional: it activates only when the API key exists in Render.
+# Never commit this key to GitHub.
+NOVA_OPENAI_API_KEY = os.getenv("NOVA_OPENAI_API_KEY", "").strip()
+NOVA_OPENAI_MODEL = os.getenv("NOVA_OPENAI_MODEL", "gpt-4.1-mini").strip()
+GUEST_USER_LIMIT_PER_DAY = int(os.getenv("GUEST_USER_LIMIT_PER_DAY", "3"))
+GUEST_CHAT_LIMIT_PER_MINUTE = int(os.getenv("GUEST_CHAT_LIMIT_PER_MINUTE", "1"))
 
 LANGUAGES = {
     "ko": ("🇰🇷 한국어", "한국어"), "en": ("🇺🇸 English", "English"),
@@ -113,6 +123,9 @@ ALLOWED_LINK_PREFIXES = [
     "https://discord.gg/u37axpnfwc",
 ]
 MESSAGE_TIMESTAMPS = defaultdict(deque)
+# In-memory only: Guest NOVA stores no question content or chat history.
+GUEST_USER_TIMESTAMPS = defaultdict(deque)
+GUEST_CHAT_TIMESTAMPS = defaultdict(deque)
 
 PROJECT_KEYWORDS = {
     "website": f"🌐 Official Website: {OFFICIAL_WEBSITE}",
@@ -372,6 +385,158 @@ def exceeds_message_rate(chat_id, user_id):
         timestamps.popleft()
     timestamps.append(now)
     return len(timestamps) > MAX_MESSAGES_PER_WINDOW
+
+
+
+def guest_rate_status(user_id, chat_id):
+    """Return an optional rate-limit message without persisting guest data."""
+    now = time.monotonic()
+    user_window = GUEST_USER_TIMESTAMPS[user_id]
+    while user_window and now - user_window[0] >= 24 * 60 * 60:
+        user_window.popleft()
+    if len(user_window) >= GUEST_USER_LIMIT_PER_DAY:
+        return "⏳ NOVA Guest limit reached for today (3 requests). Please try again tomorrow or open SpaceNovaX."
+
+    chat_window = GUEST_CHAT_TIMESTAMPS[chat_id]
+    while chat_window and now - chat_window[0] >= 60:
+        chat_window.popleft()
+    if len(chat_window) >= GUEST_CHAT_LIMIT_PER_MINUTE:
+        return "⏳ NOVA Guest is cooling down for one minute in this chat. Please try again shortly."
+
+    user_window.append(now)
+    chat_window.append(now)
+    return ""
+
+
+def guest_fallback_answer():
+    return (
+        "⚡ NOVA AI is available inside the SpaceNovaX Mini App.\\n\\n"
+        "Open it to explore community mining, NOVA AI, missions, games and global navigation."
+    )
+
+
+def _json_post(url, payload, headers=None, timeout=18):
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _openai_output(data):
+    output_text = str(data.get("output_text") or "").strip()
+    if output_text:
+        return output_text
+    for item in data.get("output", []) or []:
+        for content in item.get("content", []) or []:
+            text = content.get("text") if isinstance(content, dict) else ""
+            if text:
+                return str(text).strip()
+    return ""
+
+
+async def nova_answer(question):
+    """Generate a concise Guest answer. No prompts are written to storage or logs."""
+    if not NOVA_OPENAI_API_KEY:
+        return guest_fallback_answer()
+
+    instructions = (
+        "You are NOVA, the concise SpaceNovaX Telegram assistant. "
+        "Answer in the user's language when clear. Explain SpaceNovaX basics: community mining, "
+        "missions, Captain ID, the Mini App, games, global navigation and community services. "
+        "Do not invent token prices, rewards, listings, partnerships, launch dates or account data. "
+        "Do not request private keys, seed phrases, passwords or personal data. "
+        "For financial topics, provide general educational information only and include "
+        "'Not financial advice — do your own research.' Keep the reply under 700 characters."
+    )
+    payload = {
+        "model": NOVA_OPENAI_MODEL,
+        "instructions": instructions,
+        "input": question,
+        "max_output_tokens": 260,
+    }
+    try:
+        response = await asyncio.to_thread(
+            _json_post,
+            "https://api.openai.com/v1/responses",
+            payload,
+            {"Authorization": f"Bearer {NOVA_OPENAI_API_KEY}"},
+            18,
+        )
+        answer = _openai_output(response)
+        if answer:
+            return answer[:900]
+    except Exception:
+        # Keep the public guest flow reliable; do not expose provider details.
+        pass
+    return guest_fallback_answer()
+
+
+async def answer_guest_query(query_id, text):
+    """Use Telegram's official Guest Mode method, absent from PTB 21.6."""
+    if not query_id:
+        return
+    result = {
+        "type": "article",
+        "id": secrets.token_hex(8),
+        "title": "NOVA · SpaceNovaX",
+        "input_message_content": {
+            "message_text": text[:1000],
+            "disable_web_page_preview": True,
+        },
+        "reply_markup": {
+            "inline_keyboard": [[
+                {
+                    "text": "🚀 Open SpaceNovaX",
+                    "url": f"https://t.me/{BOT_USERNAME}?startapp=guest",
+                }
+            ]]
+        },
+    }
+    try:
+        await asyncio.to_thread(
+            _json_post,
+            f"https://api.telegram.org/bot{BOT_TOKEN}/answerGuestQuery",
+            {"guest_query_id": query_id, "result": result},
+            None,
+            12,
+        )
+    except Exception:
+        # A guest query can only be answered once; failures must not affect
+        # normal bot commands or moderation.
+        pass
+
+
+async def guest_nova(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Bot API 10 guest_message updates while keeping PTB 21.6 unchanged."""
+    raw = (getattr(update, "api_kwargs", {}) or {}).get("guest_message")
+    if not isinstance(raw, dict):
+        return
+
+    query_id = str(raw.get("guest_query_id") or "")
+    caller = raw.get("guest_bot_caller_user") or raw.get("from") or {}
+    caller_chat = raw.get("guest_bot_caller_chat") or raw.get("chat") or {}
+    user_id = str(caller.get("id") or "guest")
+    chat_id = str(caller_chat.get("id") or user_id)
+    question = str(raw.get("text") or raw.get("caption") or "")
+    question = re.sub(rf"@{re.escape(BOT_USERNAME)}\\b", "", question, flags=re.I).strip(" \t\\r\\n:,-")
+    if not question:
+        await answer_guest_query(
+            query_id,
+            "⚡ Ask NOVA about SpaceNovaX, community mining, missions, Captain ID or the Mini App.",
+        )
+        return
+
+    limited = guest_rate_status(user_id, chat_id)
+    if limited:
+        await answer_guest_query(query_id, limited)
+        return
+
+    await answer_guest_query(query_id, await nova_answer(question))
 
 
 def get_warning_count(chat_id, user_id):
@@ -896,6 +1061,9 @@ def main():
     app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(ChatMemberHandler(welcome, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, moderate_message))
+    # PTB 21.6 keeps Bot API 10 guest_message in Update.api_kwargs.
+    app.add_handler(TypeHandler(Update, guest_nova))
+    allowed_updates = list(dict.fromkeys([*Update.ALL_TYPES, "guest_message"]))
     if WEBHOOK_URL:
         print(f"{PROJECT_NAME} community bot is running in webhook mode on port {PORT}...")
         app.run_webhook(
@@ -904,11 +1072,11 @@ def main():
             url_path="telegram",
             webhook_url=f"{WEBHOOK_URL}/telegram",
             drop_pending_updates=False,
-            allowed_updates=Update.ALL_TYPES,
+            allowed_updates=allowed_updates,
         )
     else:
         print(f"{PROJECT_NAME} community bot is running in local polling mode...")
-        app.run_polling(drop_pending_updates=False, allowed_updates=Update.ALL_TYPES)
+        app.run_polling(drop_pending_updates=False, allowed_updates=allowed_updates)
 
 
 if __name__ == "__main__":
