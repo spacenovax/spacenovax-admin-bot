@@ -61,10 +61,17 @@ PORT = int(os.getenv("PORT", "10000"))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", RENDER_EXTERNAL_URL).strip().rstrip("/")
 
-# Guest NOVA is optional: it activates only when the API key exists in Render.
+# NOVA uses Gemini's free tier when a Gemini API key is present in Render.
 # Never commit this key to GitHub.
-NOVA_OPENAI_API_KEY = os.getenv("NOVA_OPENAI_API_KEY", "").strip()
-NOVA_OPENAI_MODEL = os.getenv("NOVA_OPENAI_MODEL", "gpt-4.1-mini").strip()
+NOVA_GEMINI_API_KEY = (
+    os.getenv("NOVA_GEMINI_API_KEY", "").strip()
+    or os.getenv("GEMINI_API_KEY", "").strip()
+)
+NOVA_GEMINI_MODEL = (
+    os.getenv("NOVA_GEMINI_MODEL", "").strip()
+    or os.getenv("GEMINI_MODEL", "").strip()
+    or "gemini-2.5-flash-lite"
+)
 GUEST_USER_LIMIT_PER_DAY = int(os.getenv("GUEST_USER_LIMIT_PER_DAY", "3"))
 GUEST_CHAT_LIMIT_PER_MINUTE = int(os.getenv("GUEST_CHAT_LIMIT_PER_MINUTE", "1"))
 
@@ -431,21 +438,22 @@ def _json_post(url, payload, headers=None, timeout=18):
         return json.loads(response.read().decode("utf-8"))
 
 
-def _openai_output(data):
-    output_text = str(data.get("output_text") or "").strip()
-    if output_text:
-        return output_text
-    for item in data.get("output", []) or []:
-        for content in item.get("content", []) or []:
-            text = content.get("text") if isinstance(content, dict) else ""
-            if text:
-                return str(text).strip()
-    return ""
+def _gemini_output(data):
+    candidates = data.get("candidates", []) or []
+    if not candidates:
+        return ""
+    content = candidates[0].get("content", {}) if isinstance(candidates[0], dict) else {}
+    parts = content.get("parts", []) if isinstance(content, dict) else []
+    return "".join(
+        str(part.get("text") or "")
+        for part in parts
+        if isinstance(part, dict)
+    ).strip()
 
 
 async def nova_answer(question):
-    """Generate a concise Guest answer. No prompts are written to storage or logs."""
-    if not NOVA_OPENAI_API_KEY:
+    """Generate a concise Gemini-free-tier answer without storing prompts locally."""
+    if not NOVA_GEMINI_API_KEY:
         return guest_fallback_answer()
 
     instructions = (
@@ -458,24 +466,26 @@ async def nova_answer(question):
         "'Not financial advice — do your own research.' Keep the reply under 700 characters."
     )
     payload = {
-        "model": NOVA_OPENAI_MODEL,
-        "instructions": instructions,
-        "input": question,
-        "max_output_tokens": 260,
+        "systemInstruction": {"parts": [{"text": instructions}]},
+        "contents": [{"role": "user", "parts": [{"text": question}]}],
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 260},
     }
     try:
         response = await asyncio.to_thread(
             _json_post,
-            "https://api.openai.com/v1/responses",
+            (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{NOVA_GEMINI_MODEL}:generateContent?key={NOVA_GEMINI_API_KEY}"
+            ),
             payload,
-            {"Authorization": f"Bearer {NOVA_OPENAI_API_KEY}"},
+            None,
             18,
         )
-        answer = _openai_output(response)
+        answer = _gemini_output(response)
         if answer:
             return answer[:900]
     except Exception:
-        # Keep the public guest flow reliable; do not expose provider details.
+        # Keep the public inline flow reliable; do not expose provider details.
         pass
     return guest_fallback_answer()
 
