@@ -678,7 +678,226 @@ def log_action(chat_id, user_id, action, detail=""):
 
 def language_keyboard():
     rows, items = [], list(LANGUAGES.items())
+    for i in range(0, len(items), 2):
+        rows.append([InlineKeyboardButton(label, callback_data=f"lang:{code}") for code, (label, _) in items[i:i+2]])
+    return InlineKeyboardMarkup(rows)
 
+
+def private_bot_link(start_parameter="community"):
+    return f"https://t.me/{BOT_USERNAME}?start={start_parameter}"
+
+
+def group_welcome_keyboard(verification_token=""):
+    start_parameter = f"verify_{verification_token}" if verification_token else "community"
+    label = "🛡 Verify & Choose Language" if verification_token else "🌐 Choose Language / 언어 선택"
+    keyboard = [[InlineKeyboardButton(label, url=private_bot_link(start_parameter))]]
+    if MINI_APP_URL:
+        keyboard.append([InlineKeyboardButton("🚀 Open Mining App", url=MINI_APP_URL)])
+    keyboard.append([InlineKeyboardButton("🧭 Community App Guide", url=COMMUNITY_GUIDE_URL)])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def signed_referral_ticket(user_id, referral_code):
+    code = re.sub(r"[^A-Za-z0-9]", "", referral_code or "").upper()[:32]
+    if not code or not BOT_TOKEN:
+        return ""
+    issued_at = int(time.time())
+    payload = f"{code}.{user_id}.{issued_at}"
+    signature = hmac.new(BOT_TOKEN.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def mini_app_url(user_id=None, referral_code=""):
+    if not MINI_APP_URL:
+        return ""
+    ticket = signed_referral_ticket(user_id, referral_code) if user_id and referral_code else ""
+    if not ticket:
+        return MINI_APP_URL
+    parsed = urlsplit(MINI_APP_URL)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["rt"] = ticket
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def main_keyboard(lang="en", user_id=None, referral_code=""):
+    t = I18N.get(lang, I18N["en"])
+    keyboard = []
+    launch_url = mini_app_url(user_id, referral_code)
+    if launch_url:
+        keyboard.append([
+            InlineKeyboardButton(
+                t["app"], web_app=WebAppInfo(url=launch_url)
+            )
+        ])
+    keyboard.extend([
+        [InlineKeyboardButton(t["channel"], url=f"https://t.me/{OFFICIAL_CHANNEL.replace('@', '')}"), InlineKeyboardButton(t["group"], url=f"https://t.me/{OFFICIAL_GROUP.replace('@', '')}")],
+        [InlineKeyboardButton(t["site"], url=OFFICIAL_WEBSITE)],
+        [InlineKeyboardButton("🧭 Community App Guide", url=COMMUNITY_GUIDE_URL)],
+        [InlineKeyboardButton(
+            t["mining"], callback_data=f"info:{lang}:mining"), InlineKeyboardButton(t["mission"], callback_data=f"info:{lang}:mission")],
+        [InlineKeyboardButton(t["referral"], callback_data=f"info:{lang}:referral"), InlineKeyboardButton(t["lang"], callback_data="choose_lang")],
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    upsert_user(user)
+    start_arg = context.args[0] if context.args else ""
+    if start_arg.startswith("verify_"):
+        token = start_arg.split("verify_", 1)[1]
+        verification = get_verification(token, user.id)
+        if not verification:
+            await update.effective_message.reply_text(
+                "⏳ This verification link has expired. Please return to the group and use the latest verification button."
+            )
+            return
+        answer = int(verification["answer"])
+        await update.effective_message.reply_text(
+            f"🛡 Security check\n\n{verification['question']}",
+            reply_markup=captcha_keyboard(token, answer),
+        )
+        return
+    ref_code = ""
+    if start_arg and start_arg != "community":
+        candidate = re.sub(r"[^A-Za-z0-9_-]", "", start_arg)[:64]
+        if candidate and candidate != str(user.id):
+            ref_code = candidate
+            conn = db()
+            conn.execute("UPDATE users SET referred_by=COALESCE(referred_by, ?) WHERE user_id=?", (candidate, user.id))
+            conn.commit(); conn.close()
+    await update.effective_message.reply_text(
+        "🌐 Select your language / 언어를 선택하세요",
+        reply_markup=language_keyboard(),
+    )
+    context.user_data["pending_ref"] = ref_code
+
+
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    if data.startswith("captcha:"):
+        _, token, submitted = data.split(":", 2)
+        verification = get_verification(token, query.from_user.id)
+        if not verification:
+            await query.edit_message_text("⏳ Verification expired. Return to the group and use the newest button.")
+            return
+        if not hmac.compare_digest(str(submitted), str(verification["answer"])):
+            await query.answer("Incorrect answer. Try again.", show_alert=True)
+            return
+        try:
+            chat = await context.bot.get_chat(verification["chat_id"])
+            permissions = chat.permissions or ChatPermissions(can_send_messages=True)
+            await context.bot.restrict_chat_member(verification["chat_id"], query.from_user.id, permissions=permissions)
+        except Exception:
+            # The group flow still works if the administrator has not yet
+            # granted Restrict Members permission to the bot.
+            pass
+        consume_verification(token)
+        await query.edit_message_text(
+            "✅ Verification complete. Select your language / 언어를 선택하세요",
+            reply_markup=language_keyboard(),
+        )
+        return
+    if data == "choose_lang":
+        await query.edit_message_text("🌐 Select your language / 언어를 선택하세요", reply_markup=language_keyboard())
+        return
+    if data.startswith("lang:"):
+        lang = data.split(":", 1)[1]
+        if lang not in I18N: lang = "en"
+        conn = db(); conn.execute("UPDATE users SET language=? WHERE user_id=?", (lang, query.from_user.id)); conn.commit(); conn.close()
+        t = I18N[lang]
+        ref = context.user_data.pop("pending_ref", "") or stored_referral_code(query.from_user.id)
+        ref_line = ("\n\n" + t["ref"].format(code=ref)) if ref else ""
+        onboarding = ONBOARDING.get(lang, ONBOARDING["en"])
+        await query.edit_message_text(
+            f"{t['welcome']}\n\n{onboarding}{ref_line}\n\n{t['choose']}",
+            reply_markup=main_keyboard(lang, query.from_user.id, ref),
+        )
+        return
+    if data.startswith("info:"):
+        _, lang, topic = data.split(":", 2)
+        messages = {
+          "mining": {"ko":"⛏ 앱에서 매일 채굴 세션을 활성화하고 현재 시간당 채굴 속도를 확인하세요.","en":"⛏ Activate your daily mining session in the app and check your current hourly mining rate."},
+          "mission": {"ko":"🎯 앱의 공식 채널 5대 미션과 일일 게임 미션에서 진행 상태를 확인하세요.","en":"🎯 Check the five official-channel missions and daily game mission in the app."},
+          "referral": {"ko":"👥 앱에서 개인 초대 링크를 공유하세요. 동일 계정·자기 추천·중복 연결은 인정되지 않습니다.","en":"👥 Share your personal invitation link from the app. Self-referrals and duplicate links are not accepted."},
+        }
+        await query.message.reply_text(messages[topic].get(lang, messages[topic]["en"]))
+
+
+async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        f"📌 {PROJECT_NAME} Community Rules\n\n"
+        "1. No scam or phishing links.\n"
+        "2. Never ask for private keys or seed phrases.\n"
+        "3. No spam, advertising, or abusive language.\n"
+        "4. Do not impersonate admins or support staff.\n"
+        "5. Always do your own research. Investment decisions are your responsibility.\n\n"
+        f"Users who receive {MAX_WARNINGS} warnings may be automatically banned."
+    )
+
+
+async def rules_kr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        f"📌 {PROJECT_NAME} 커뮤니티 규칙\n\n"
+        "1. 사기 링크 및 피싱 링크 금지\n"
+        "2. 개인키 또는 시드 구문 요구 금지\n"
+        "3. 욕설, 도배 및 광고 금지\n"
+        "4. 관리자 또는 고객지원 사칭 금지\n"
+        "5. 투자 판단과 책임은 본인에게 있습니다.\n\n"
+        f"경고 {MAX_WARNINGS}회 이상이면 자동 차단될 수 있습니다."
+    )
+
+
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        f"🚀 Welcome to {PROJECT_NAME}\n\n"
+        f"{PROJECT_NAME} is a next-generation Web3 ecosystem focused on community growth, "
+        "AI-powered innovation, and space-inspired digital experiences.\n\n"
+        f"Token Symbol: {TOKEN_SYMBOL}\n"
+        f"Official Website: {OFFICIAL_WEBSITE}\n"
+        f"Official Channel: {OFFICIAL_CHANNEL}\n"
+        f"Official Group: {OFFICIAL_GROUP}"
+    )
+
+
+async def about_kr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        f"🚀 {PROJECT_NAME}에 오신 것을 환영합니다.\n\n"
+        f"{PROJECT_NAME}는 커뮤니티 성장, AI 혁신, 우주 테마 디지털 경험을 결합한 "
+        "차세대 Web3 생태계입니다.\n\n"
+        f"토큰 심볼: {TOKEN_SYMBOL}\n"
+        f"공식 웹사이트: {OFFICIAL_WEBSITE}\n"
+        f"공식 채널: {OFFICIAL_CHANNEL}\n"
+        f"공식 그룹: {OFFICIAL_GROUP}"
+    )
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        "SpaceNovaX Bot Commands\n\n"
+        "/start - Start bot\n"
+        "/rules - Community rules\n"
+        "/about - About SpaceNovaX\n"
+        "/rules_kr - Korean rules\n"
+        "/about_kr - Korean introduction\n"
+        "/stats - Bot status\n\n"
+        "/report - Reply to a suspicious message\n\n"
+        "Admin only:\n"
+        "/warn - Warn replied user\n"
+        "/unwarn - Remove warning\n"
+        "/ban - Ban replied user\n"
+        "/unban user_id - Unban user\n"
+        "/mute - Mute replied user for 1 hour\n"
+        "/pin - Pin replied message"
+    )
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = db()
+    users = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+    warned = conn.execute("SELECT COUNT(*) AS c FROM warnings WHERE count > 0").fetchone()["c"]
     logs = conn.execute("SELECT COUNT(*) AS c FROM logs").fetchone()["c"]
     conn.close()
     await update.effective_message.reply_text(
