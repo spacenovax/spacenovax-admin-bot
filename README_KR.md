@@ -95,3 +95,15 @@ NOVA_OPENAI_MODEL=gpt-4.1-mini # 필요 시 사용 가능한 모델명으로 변
 
 배포 후 BotFather의 **MiniApp → Guest Mode**를 켜야 실제 호출이 가능합니다.
 
+## NOVA Inline Mode
+
+Guest Mode 메뉴가 BotFather에 아직 보이지 않을 때 사용할 수 있는 무료 대안입니다.
+BotFather에서 Inline Mode를 켠 뒤, 사용자는 어느 Telegram 대화방에서나 아래처럼 입력할 수 있습니다.
+
+```text
+@SpaceNovaXAdminBot What is SpaceNovaX?
+```
+
+NOVA 답변 카드를 한 번 눌러 대화방에 공유합니다. 입력 중 API가 반복 호출되지 않도록
+질문 끝에 `?`가 있을 때만 답변을 생성합니다. Guest NOVA와 동일하게 사용자당 하루 3회
+제한이며, 질문 내용은 DB나 로그에 저장하지 않습니다.
