@@ -76,3 +76,22 @@ JOIN_VERIFICATION_ENABLED=true
 `DATABASE_URL`을 설정하면 언어, 경고, 신고 및 인증 기록을 PostgreSQL에 저장합니다.
 값이 없을 때는 기존 SQLite 임시 저장 방식으로 동작하므로, 운영 환경에서는
 PostgreSQL 설정을 권장합니다.
+
+## NOVA Guest Mode
+
+Telegram의 Guest Mode를 켜면 사용자는 봇을 그룹에 추가하지 않아도 다른 공개/비공개 대화에서
+`@SpaceNovaXAdminBot 질문`처럼 NOVA를 호출할 수 있습니다. 봇은 호출된 메시지와 직접 답글 문맥만
+받으며, 대화 기록이나 참여자 목록에는 접근하지 않습니다.
+
+- 답변마다 **Open SpaceNovaX** 버튼이 표시됩니다.
+- 기본 제한: 사용자당 하루 3회, 같은 대화방에서는 분당 1회입니다.
+- 질문 내용·대화 기록은 DB나 로그에 저장하지 않습니다.
+- Render 환경 변수에 아래만 등록합니다. 키는 GitHub에 올리지 마세요.
+
+```text
+NOVA_OPENAI_API_KEY=...       # OpenAI API 키
+NOVA_OPENAI_MODEL=gpt-4.1-mini # 필요 시 사용 가능한 모델명으로 변경
+```
+
+배포 후 BotFather의 **MiniApp → Guest Mode**를 켜야 실제 호출이 가능합니다.
+
