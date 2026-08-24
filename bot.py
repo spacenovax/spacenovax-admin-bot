@@ -411,7 +411,7 @@ def guest_rate_status(user_id, chat_id):
 
 def guest_fallback_answer():
     return (
-        "⚡ NOVA AI is available inside the SpaceNovaX Mini App.\\n\\n"
+        "⚡ NOVA AI is available inside the SpaceNovaX Mini App.\n\n"
         "Open it to explore community mining, NOVA AI, missions, games and global navigation."
     )
 
@@ -524,7 +524,7 @@ async def guest_nova(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(caller.get("id") or "guest")
     chat_id = str(caller_chat.get("id") or user_id)
     question = str(raw.get("text") or raw.get("caption") or "")
-    question = re.sub(rf"@{re.escape(BOT_USERNAME)}\\b", "", question, flags=re.I).strip(" \t\\r\\n:,-")
+    question = re.sub(rf"@{re.escape(BOT_USERNAME)}\b", "", question, flags=re.I).strip(" \t\r\n:,-")
     if not question:
         await answer_guest_query(
             query_id,
