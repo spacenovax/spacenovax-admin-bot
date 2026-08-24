@@ -86,12 +86,14 @@ Telegram의 Guest Mode를 켜면 사용자는 봇을 그룹에 추가하지 않�
 - 답변마다 **Open SpaceNovaX** 버튼이 표시됩니다.
 - 기본 제한: 사용자당 하루 3회, 같은 대화방에서는 분당 1회입니다.
 - 질문 내용·대화 기록은 DB나 로그에 저장하지 않습니다.
-- Render 환경 변수에 아래만 등록합니다. 키는 GitHub에 올리지 마세요.
+- Render 환경 변수에 Gemini API 키를 등록합니다. 키는 GitHub에 올리지 마세요.
 
 ```text
-NOVA_OPENAI_API_KEY=...       # OpenAI API 키
-NOVA_OPENAI_MODEL=gpt-4.1-mini # 필요 시 사용 가능한 모델명으로 변경
+GEMINI_API_KEY=...             # Google AI Studio Gemini API 키
+GEMINI_MODEL=gemini-2.5-flash-lite  # 선택 사항
 ```
+
+Gemini Free Tier 한도 안에서만 사용되며, 결제수단이나 OpenAI API 키는 필요하지 않습니다.
 
 배포 후 BotFather의 **MiniApp → Guest Mode**를 켜야 실제 호출이 가능합니다.
 
