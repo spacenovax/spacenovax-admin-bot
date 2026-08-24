@@ -21,6 +21,8 @@ from telegram import (
     InlineKeyboardMarkup,
     ChatPermissions,
     WebAppInfo,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -31,6 +33,7 @@ from telegram.ext import (
     filters,
     CallbackQueryHandler,
     TypeHandler,
+    InlineQueryHandler,
 )
 
 load_dotenv()
@@ -538,6 +541,73 @@ async def guest_nova(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await answer_guest_query(query_id, await nova_answer(question))
+
+
+
+def inline_nova_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "🚀 Open SpaceNovaX",
+            url=f"https://t.me/{BOT_USERNAME}?startapp=inline",
+        )
+    ]])
+
+
+def inline_nova_result(title, description, message_text):
+    return InlineQueryResultArticle(
+        id=secrets.token_hex(8),
+        title=title,
+        description=re.sub(r"\s+", " ", description).strip()[:180],
+        input_message_content=InputTextMessageContent(
+            message_text=message_text[:1000],
+            disable_web_page_preview=True,
+        ),
+        reply_markup=inline_nova_keyboard(),
+    )
+
+
+async def inline_nova(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Answer an explicit inline question without calling AI while the user types."""
+    query = update.inline_query
+    if not query:
+        return
+
+    question = (query.query or "").strip()
+    if not question:
+        prompt = "⚡ Type a SpaceNovaX question and end it with a question mark (?); NOVA will prepare a shareable answer."
+        await query.answer(
+            [inline_nova_result("Ask NOVA · SpaceNovaX", prompt, prompt)],
+            cache_time=0,
+            is_personal=True,
+        )
+        return
+
+    # Inline updates arrive on every keystroke. A final '?' prevents accidental
+    # API calls while a user is still typing their question.
+    if not question.endswith("?"):
+        prompt = "Finish the question with '?' to ask NOVA. Example: What is SpaceNovaX?"
+        await query.answer(
+            [inline_nova_result("NOVA is ready", prompt, prompt)],
+            cache_time=0,
+            is_personal=True,
+        )
+        return
+
+    limited = guest_rate_status(str(query.from_user.id), f"inline:{query.from_user.id}")
+    if limited:
+        await query.answer(
+            [inline_nova_result("NOVA limit", limited, limited)],
+            cache_time=0,
+            is_personal=True,
+        )
+        return
+
+    answer = await nova_answer(question)
+    await query.answer(
+        [inline_nova_result("NOVA · SpaceNovaX", answer, answer)],
+        cache_time=0,
+        is_personal=True,
+    )
 
 
 def get_warning_count(chat_id, user_id):
@@ -1060,6 +1130,7 @@ def main():
     for cmd, func in handlers:
         app.add_handler(CommandHandler(cmd, func))
     app.add_handler(CallbackQueryHandler(callbacks))
+    app.add_handler(InlineQueryHandler(inline_nova))
     app.add_handler(ChatMemberHandler(welcome, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, moderate_message))
     # PTB 21.6 keeps Bot API 10 guest_message in Update.api_kwargs.
