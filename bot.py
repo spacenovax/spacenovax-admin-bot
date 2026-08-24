@@ -30,6 +30,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
     CallbackQueryHandler,
+    TypeHandler,
 )
 
 load_dotenv()
