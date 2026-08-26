@@ -63,7 +63,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", RENDER_EXTERNAL_URL).strip().rstrip("/")
 
 # Official-channel promotion is opt-in at the deployment level. It never sends
 # unsolicited messages to private users or external communities.
-AUTO_PROMO_ENABLED = os.getenv("AUTO_PROMO_ENABLED", "true").lower() == "true"
+AUTO_PROMO_ENABLED = os.getenv("AUTO_PROMO_ENABLED", "false").lower() == "true"
 AUTO_PROMO_CHAT_ID = os.getenv("AUTO_PROMO_CHAT_ID", OFFICIAL_CHANNEL).strip()
 AUTO_PROMO_HOUR_KST = max(0, min(23, int(os.getenv("AUTO_PROMO_HOUR_KST", "20"))))
 AUTO_PROMO_MINUTE_KST = max(0, min(59, int(os.getenv("AUTO_PROMO_MINUTE_KST", "0"))))
