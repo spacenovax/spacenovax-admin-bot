@@ -61,6 +61,24 @@ PORT = int(os.getenv("PORT", "10000"))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", RENDER_EXTERNAL_URL).strip().rstrip("/")
 
+# Official-channel promotion is opt-in at the deployment level. It never sends
+# unsolicited messages to private users or external communities.
+AUTO_PROMO_ENABLED = os.getenv("AUTO_PROMO_ENABLED", "true").lower() == "true"
+AUTO_PROMO_CHAT_ID = os.getenv("AUTO_PROMO_CHAT_ID", OFFICIAL_CHANNEL).strip()
+AUTO_PROMO_HOUR_KST = max(0, min(23, int(os.getenv("AUTO_PROMO_HOUR_KST", "20"))))
+AUTO_PROMO_MINUTE_KST = max(0, min(59, int(os.getenv("AUTO_PROMO_MINUTE_KST", "0"))))
+KST = timezone(timedelta(hours=9))
+
+AUTO_PROMO_MESSAGES = (
+    "🚀 SpaceNovaX is open in Telegram.\n\nExplore NOVA AI, global navigation, missions, community tools and digital experiences — all from one Mini App.\n\nExplore. Mine. Evolve.",
+    "🌌 Discover the SpaceNovaX ecosystem.\n\nOpen the Mini App to explore NOVA AI, community missions, global navigation and the expanding digital universe.",
+    "🤖 Meet NOVA AI inside SpaceNovaX.\n\nExplore intelligent tools, community experiences and the SpaceNovaX Mini App in Telegram.",
+    "🧭 Global navigation, NOVA AI and digital experiences — connected through SpaceNovaX.\n\nOpen the Mini App and explore what is being built.",
+    "🎮 The SpaceNovaX universe is growing.\n\nExplore games, missions, rankings, NOVA AI and community services in one Telegram Mini App.",
+    "🌍 Join the global SpaceNovaX community.\n\nDiscover technology, digital experiences and community participation from one connected Mini App.",
+    "✨ A new digital universe is taking shape.\n\nOpen SpaceNovaX in Telegram and explore NOVA AI, missions, global tools and more.",
+)
+
 # NOVA uses Gemini's free tier when a Gemini API key is present in Render.
 # Never commit this key to GitHub.
 NOVA_GEMINI_API_KEY = (
@@ -1024,6 +1042,56 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+def auto_promo_keyboard():
+    bot_link = f"https://t.me/{BOT_USERNAME}?startapp"
+    channel_link = f"https://t.me/{OFFICIAL_CHANNEL.lstrip('@')}"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Open SpaceNovaX Mini App", url=bot_link)],
+        [
+            InlineKeyboardButton("🌐 Website", url=OFFICIAL_WEBSITE),
+            InlineKeyboardButton("💬 Community", url=channel_link),
+        ],
+    ])
+
+
+def seconds_until_next_auto_promo():
+    now = datetime.now(KST)
+    target = now.replace(
+        hour=AUTO_PROMO_HOUR_KST,
+        minute=AUTO_PROMO_MINUTE_KST,
+        second=0,
+        microsecond=0,
+    )
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+async def auto_promo_loop(application):
+    while True:
+        await asyncio.sleep(seconds_until_next_auto_promo())
+        message_index = datetime.now(KST).date().toordinal() % len(AUTO_PROMO_MESSAGES)
+        try:
+            await application.bot.send_message(
+                chat_id=AUTO_PROMO_CHAT_ID,
+                text=AUTO_PROMO_MESSAGES[message_index],
+                reply_markup=auto_promo_keyboard(),
+            )
+            print("Auto promotion posted to the official channel.")
+        except Exception as exc:
+            print(f"Auto promotion was not posted: {type(exc).__name__}")
+
+
+async def start_auto_promo(application):
+    if not AUTO_PROMO_ENABLED:
+        print("Official-channel auto promotion is disabled.")
+        return
+    if not AUTO_PROMO_CHAT_ID:
+        print("Official-channel auto promotion is not configured.")
+        return
+    application.create_task(auto_promo_loop(application), name="official_channel_auto_promo")
+
+
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.chat_member:
         return
@@ -1130,6 +1198,7 @@ def main():
             BotCommand("help", "Command list"),
             BotCommand("report", "Report a replied message"),
         ])
+        await start_auto_promo(application)
 
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(configure_bot).build()
     handlers = [
