@@ -1,0 +1,43 @@
+name: Official channel daily promotion
+
+on:
+  schedule:
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish SpaceNovaX daily update
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ]; then
+            echo "Missing TELEGRAM_BOT_TOKEN GitHub secret."
+            exit 1
+          fi
+
+          messages=(
+            $'🚀 SpaceNovaX is open in Telegram.\n\nExplore NOVA AI, global navigation, missions, community tools and digital experiences — all from one Mini App.\n\nExplore. Mine. Evolve.'
+            $'🌌 Discover the SpaceNovaX ecosystem.\n\nOpen the Mini App to explore NOVA AI, community missions, global navigation and the expanding digital universe.'
+            $'🤖 Meet NOVA AI inside SpaceNovaX.\n\nExplore intelligent tools, community experiences and the SpaceNovaX Mini App in Telegram.'
+            $'🧭 Global navigation, NOVA AI and digital experiences — connected through SpaceNovaX.\n\nOpen the Mini App and explore what is being built.'
+            $'🎮 The SpaceNovaX universe is growing.\n\nExplore games, missions, rankings, NOVA AI and community services in one Telegram Mini App.'
+            $'🌍 Join the global SpaceNovaX community.\n\nDiscover technology, digital experiences and community participation from one connected Mini App.'
+            $'✨ A new digital universe is taking shape.\n\nOpen SpaceNovaX in Telegram and explore NOVA AI, missions, global tools and more.'
+          )
+          day_number=$(date -u +%j)
+          message_index=$((10#$day_number % ${#messages[@]}))
+          message="${messages[$message_index]}"
+
+          curl --fail-with-body --silent --show-error \
+            --data-urlencode "chat_id=@spacenovaxteam" \
+            --data-urlencode "text=$message" \
+            --data-urlencode "disable_web_page_preview=false" \
+            --data-urlencode 'reply_markup={"inline_keyboard":[[{"text":"🚀 Open SpaceNovaX Mini App","url":"https://t.me/SpaceNovaXAdminBot?startapp"}],[{"text":"🌐 Website","url":"https://spacenovax.com"},{"text":"💬 Community","url":"https://t.me/spacesnovax"}]]}' \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
